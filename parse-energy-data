@@ -1,0 +1,104 @@
+#! /usr/bin/perl
+#
+# Script to read a Green Button XML file representing energy usage,
+# and produce CSV output with usage for each day or hour.
+# See HELP_MESSAGE for usage.
+
+use 5.010;
+use strict;
+use warnings;
+
+use Getopt::Std;
+use List::Util qw( sum );
+use POSIX qw( strftime );
+use XML::Simple qw( :strict );
+
+# Read command-line options and XML file specification
+my %opts;
+getopts('ad:e', \%opts) or HELP_MESSAGE();
+
+my $datetime_filter = $opts{'d'};
+my $print_hourly_data = $opts{'e'};
+my $print_hourly_averages = $opts{'a'};
+my $print_daily_totals = !$print_hourly_data && !$print_hourly_averages;
+
+my $file = shift @ARGV or HELP_MESSAGE();
+
+# Gather all the readings from the file into readings_for_date
+my %readings_for_date = ();
+my $ref = XMLin($file, KeyAttr => { }, ForceArray => [ ]);
+foreach my $entry (@{$ref->{'entry'}}) {
+    my $content = $entry->{'content'} or next;
+    my $intervalBlock = $content->{'IntervalBlock'} or next;
+    my $readings = $intervalBlock->{'IntervalReading'};
+    foreach my $reading (@$readings) {
+        my $start = $reading->{'timePeriod'}->{'start'};
+        my $datestring = format_epoch_time("%Y-%m-%d", $start);
+        next if ($datetime_filter && $datestring !~ /^$datetime_filter/);
+        push @{$readings_for_date{$datestring}}, {
+            datetime => format_epoch_time("%Y-%m-%d-%T", $start),
+            hour => format_epoch_time("%H", $start),
+            kWh => $reading->{'value'} / 1000
+        };
+    }
+}
+
+if ($print_hourly_data) {
+    # just print every reading in the list
+    foreach my $date (sort keys %readings_for_date) {
+        foreach my $reading (@{$readings_for_date{$date}}) {
+            if ($print_hourly_data) {
+                printf("%s,%.2f\n", $reading->{'datetime'}, $reading->{'kWh'});
+            }
+        }
+    }
+}
+
+if ($print_hourly_averages) {
+    # sum the values for each hour, from all the input readings
+    my %hourly_totals = ();
+    foreach my $date (sort keys %readings_for_date) {
+        foreach my $reading (@{$readings_for_date{$date}}) {
+            $hourly_totals{$reading->{'hour'}} += $reading->{'kWh'};
+        }
+    }
+
+    # print the hourly data values, averaged over the number of readings
+    my $days_matched = 0 + keys %readings_for_date;
+    foreach my $hour (sort keys %hourly_totals) {
+        printf("%s,%.2f\n", $hour, $hourly_totals{$hour} / $days_matched);
+    }
+}
+
+if ($print_daily_totals) {
+    # total all the data for each day, and print it
+    foreach my $date (sort keys %readings_for_date) {
+        my $daily_total_kWh = sum map { $_->{'kWh'} } @{$readings_for_date{$date}};
+        printf("%s,%.2f\n", $date, $daily_total_kWh);
+    }
+}
+
+exit 0;
+
+# Subs
+
+sub format_epoch_time {
+    my ($format, $time) = @_;
+    return strftime($format, gmtime($time));
+}
+
+sub HELP_MESSAGE {
+    print STDERR <<EOT;
+Usage: parse-energy-data [-d date] [-e] [-a] xml-data-file
+
+Parse the energy data in the specified xml-data-file and produce
+CSV output for either each day, or each time period in the date file.
+
+Options:
+-a      Print average usage for each hour
+-d date Print data only for the specified date, formatted like 2013-11-27
+-e      Print every data point, not just daily totals
+
+EOT
+    exit 1;
+}
