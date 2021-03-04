@@ -13,6 +13,12 @@ use List::Util qw( sum );
 use POSIX qw( strftime );
 use XML::Simple qw( :strict );
 
+my %ignore_content_items_with = map { $_ => 1 } qw(
+    UsagePoint
+    LocalTimeParameters
+    ElectricPowerUsageSummary
+);
+
 # Read command-line options and XML file specification
 my %opts;
 getopts('ad:e', \%opts) or HELP_MESSAGE();
@@ -26,9 +32,13 @@ my $file = shift @ARGV or HELP_MESSAGE();
 
 # Gather all the readings from the file into readings_for_date
 my %readings_for_date = ();
-my $ref = XMLin($file, KeyAttr => { }, ForceArray => [ ]);
+my $ref = XMLin($file, KeyAttr => { }, ForceArray => [ 'IntervalReading' ]);
 foreach my $entry (@{$ref->{'entry'}}) {
     my $content = $entry->{'content'} or next;
+    my @contentkeys = keys %$content;
+    if (@contentkeys == 1 && $ignore_content_items_with{ $contentkeys[0] }) {
+        next;
+    }
     my $intervalBlock = $content->{'IntervalBlock'} or next;
     my $readings = $intervalBlock->{'IntervalReading'};
     foreach my $reading (@$readings) {
